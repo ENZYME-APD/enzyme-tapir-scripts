@@ -54,10 +54,17 @@ def main():
             "height": height
         })
 
+    # Get property IDs for Width and Depth
+    try:
+        width_pid = conn.commands.GetPropertyIds([{"type": "BuiltIn", "nonLocalizedName": "Column_CoreWidth"}])[0].propertyId
+        depth_pid = conn.commands.GetPropertyIds([{"type": "BuiltIn", "nonLocalizedName": "Column_CoreDepth"}])[0].propertyId
+    except Exception as e:
+        print(f"Failed to find core width/depth properties: {e}")
+        return
+        
     print(f"Found {len(grid_stacks)} vertical column stacks.")
 
-    new_columns_data = []
-    guids_to_delete = []
+    property_updates = []
 
     # Process each stack (from top to bottom)
     for (x, y), stack in grid_stacks.items():
@@ -68,34 +75,21 @@ def main():
             # Base size 0.4m, grows by 0.025m for every column above it
             size = 0.4 + (idx * 0.025)
             
-            new_columns_data.append({
-                "coordinates": {"x": col["x"], "y": col["y"], "z": col["z"]},
-                "height": col["height"],
-                "width": size,
-                "depth": size
-            })
-            guids_to_delete.append({"guid": col["guid"]})
+            # Prepare updates for Width and Depth
+            el_id = conn.types.ElementId(col["guid"])
+            val = conn.types.NormalLengthPropertyValue(size)
+            
+            property_updates.append(conn.types.ElementPropertyValue(el_id, width_pid, val))
+            property_updates.append(conn.types.ElementPropertyValue(el_id, depth_pid, val))
 
-    print(f"Replacing {len(new_columns_data)} columns with optimized sizes...")
+    print(f"Optimizing {len(property_updates) // 2} columns in place...")
     
-    # Create the new optimized columns
+    # Update the existing columns
     try:
-        res = conn.commands.ExecuteAddOnCommand(
-            conn.types.AddOnCommandId("TapirCommand", "CreateColumns"),
-            {"columnsData": new_columns_data}
-        )
-        created_elements = res.get("elements", [])
-        print(f"Successfully created {len(created_elements)} optimized columns.")
+        conn.commands.SetPropertyValuesOfElements(property_updates)
+        print(f"Successfully updated all columns.")
     except Exception as e:
-        print(f"Failed to create new columns: {e}")
-        return
-
-    # Delete the old columns
-    try:
-        conn.commands.DeleteElements([conn.types.ElementId(g["guid"]) for g in guids_to_delete])
-        print(f"Cleaned up {len(guids_to_delete)} old columns.")
-    except Exception as e:
-        print(f"Failed to delete old columns: {e}")
+        print(f"Failed to update columns: {e}")
 
 if __name__ == "__main__":
     main()

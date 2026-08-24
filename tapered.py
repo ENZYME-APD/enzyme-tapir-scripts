@@ -1,22 +1,25 @@
-# /// script
-# dependencies = [
-#     "archicad",
-#     "perisso @ git+https://github.com/runxel/perisso.git",
-# ]
-# ///
-
 import sys
 import os
 import subprocess
+import tkinter as tk
+from tkinter import ttk, messagebox
 
+# Auto-install dependencies if missing
 try:
-    from perisso import tapir
-    from perisso import Coordinate, Polyline
     from archicad import ACConnection
-except ImportError as e:
-    print(f"Import Error: {e}")
-    print("Please make sure perisso and archicad packages are installed.")
-    sys.exit(1)
+    from perisso import tapir, Coordinate, Polyline
+except ModuleNotFoundError:
+    print("Installing required modules...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "archicad", "git+https://github.com/runxel/perisso.git", "--break-system-packages"])
+        from archicad import ACConnection
+        from perisso import tapir, Coordinate, Polyline
+    except Exception as e:
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("Error", f"Failed to install dependencies automatically.\n{e}")
+        sys.exit(1)
 
 def distribute_points(length, step):
     pts = list(range(0, int(length), int(step)))
@@ -134,134 +137,49 @@ def get_user_layer_mapping(conn):
         
     layer_names.sort()
     
-    import http.server
-    import socketserver
-    import webbrowser
-    import urllib.parse
-    import threading
-
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Tapered Building Layer Setup</title>
-        <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; background: #f5f5f5; color: #333; }}
-            .container {{ max-width: 400px; margin: 40px auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }}
-            h2 {{ margin-top: 0; margin-bottom: 20px; font-size: 20px; text-align: center; }}
-            .form-group {{ margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; }}
-            label {{ font-weight: bold; font-size: 14px; width: 30%; }}
-            select {{ width: 65%; padding: 8px; border-radius: 6px; border: 1px solid #ccc; font-size: 14px; background: #fff; }}
-            button {{ background: #007aff; color: white; border: none; padding: 12px 20px; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; width: 100%; margin-top: 20px; transition: background 0.2s; }}
-            button:hover {{ background: #0056b3; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h2>Select Layers</h2>
-            <form method="POST" action="/submit">
-    """
-    
-    try:
-        folder_structure = conn.commands.GetAttributeFolderStructure('Layer')
-        
-        options = ""
-        def walk_folder(folder, path):
-            nonlocal options
-            current_path = f"{path} / {folder.name}" if path else folder.name
-            
-            folder_opts = ""
-            if folder.attributes:
-                for attr in folder.attributes:
-                    name = attr.attribute.name
-                    if name in layer_dict:
-                        folder_opts += f'\\n                        <option value="{name}">{name}</option>'
-            
-            if folder_opts:
-                label = current_path
-                if label == "Root":
-                    options += folder_opts
-                else:
-                    options += f'\\n                    <optgroup label="{label}">{folder_opts}\\n                    </optgroup>'
-                    
-            if folder.subfolders:
-                for sub in folder.subfolders:
-                    walk_folder(sub.attributeFolder, current_path if folder.name != "Root" else "")
-                    
-        walk_folder(folder_structure, "")
-        
-    except Exception as e:
-        print(f"Failed to fetch folder structure, falling back to flat list: {e}")
-        options = "".join([f'<option value="{name}">{name}</option>' for name in layer_names])
-        
+    selections = {}
     categories = ["Slabs", "Columns", "Beams", "Roof"]
+
+    # --- Setup Tkinter UI ---
+    root = tk.Tk()
+    root.title("Tapered Building Layer Setup")
+    root.geometry("400x250")
     
+    # Force window to front
+    root.lift()
+    root.attributes('-topmost', True)
+    root.after(50, lambda: root.attributes('-topmost', False))
+    root.focus_force()
+
+    combo_vars = {}
+    
+    padding = {'padx': 10, 'pady': 5}
     for cat in categories:
-        html_content += f"""
-                <div class="form-group">
-                    <label>{cat}:</label>
-                    <select name="{cat}">
-                        {options}
-                    </select>
-                </div>
-        """
-        
-    html_content += """
-                <button type="submit">Generate Geometry</button>
-            </form>
-        </div>
-    </body>
-    </html>
-    """
+        frame = ttk.Frame(root)
+        frame.pack(fill='x', **padding)
+        ttk.Label(frame, text=f"{cat}:", width=10).pack(side='left')
+        var = tk.StringVar()
+        combo = ttk.Combobox(frame, textvariable=var, values=layer_names, state="readonly")
+        combo.pack(side='right', fill='x', expand=True)
+        if layer_names:
+            combo.set(layer_names[0])
+        combo_vars[cat] = var
 
-    class RequestHandler(http.server.BaseHTTPRequestHandler):
-        selections = {}
-        
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            self.wfile.write(html_content.encode('utf-8'))
-            
-        def do_POST(self):
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length).decode('utf-8')
-            parsed = urllib.parse.parse_qs(post_data)
-            
-            for cat in categories:
-                if cat in parsed:
-                    RequestHandler.selections[cat] = parsed[cat][0]
-                    
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            self.wfile.write(b"<html><head><style>body{font-family:sans-serif;text-align:center;padding:50px;}</style></head><body><h2>Success! Returning to Archicad...</h2><p>You may now close this tab.</p><script>setTimeout(function(){window.close();}, 1500);</script></body></html>")
-            
-            # Shutdown the server
-            threading.Thread(target=self.server.shutdown).start()
-            
-        def log_message(self, format, *args):
-            pass # Suppress HTTP logs in terminal
-
-    try:
-        print("Waiting for user layer selection...")
-        with socketserver.TCPServer(("127.0.0.1", 0), RequestHandler) as httpd:
-            port = httpd.server_address[1]
-            # Open the UI in the default web browser
-            webbrowser.open(f"http://127.0.0.1:{port}")
-            httpd.serve_forever()
-            
-        selections = {}
+    def on_submit():
         for cat in categories:
-            if cat in RequestHandler.selections:
-                name = RequestHandler.selections[cat]
-                selections[cat] = layer_dict[name]
-                print(f"Mapped {cat} to layer {name}")
-                
-        return selections
-    except Exception as e:
-        print(f"Error during UI selection: {e}")
-        return {}
+            name = combo_vars[cat].get()
+            selections[cat] = layer_dict[name]
+            print(f"Mapped {cat} to layer {name}")
+        root.destroy()
+
+    btn_frame = ttk.Frame(root)
+    btn_frame.pack(fill='x', pady=15)
+    ttk.Button(btn_frame, text="Generate Geometry", command=on_submit).pack(side='right', padx=10)
+    ttk.Button(btn_frame, text="Cancel", command=root.destroy).pack(side='right')
+
+    root.mainloop()
+
+    return selections
 
 def assign_layers(conn, elements, layer_index):
     if not elements or layer_index is None:
